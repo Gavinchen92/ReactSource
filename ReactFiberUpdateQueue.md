@@ -155,3 +155,82 @@ function ensureUpdateQueues(fiber: Fiber) {
   _queue2 = queue2 !== queue1 ? queue2 : null;
 }
 ```
+
+- insertUpdate 将update对象插入fiber
+> *work-in-progress* 队列是*current*队列的一个子集.
+我们需要将新的update对象同时插入这个两个队列
+然而， 有一种可能情况是update将要插入的位置是不相同的
+为了解决这个问题, 我们需要克隆一份update对象插入另一个队列中
+并且两个队列的保持相同的持久层数据结构, 因为update插入*work-in-progress*总是在队列的前面
+当两个插入的位置相同时， 我们不需要克隆update
+如果update被克隆了， 则返回克隆的update, 否则返回null
+
+```javascript
+function insertUpdate(fiber: Fiber, update: Update): Update | null {
+  // We'll have at least one and at most two distinct update queues.
+  ensureUpdateQueues(fiber);
+  const queue1 = _queue1;
+  const queue2 = _queue2;
+
+  // Warn if an update is scheduled from inside an updater function.
+  if (__DEV__) {
+    if (queue1.isProcessing || (queue2 !== null && queue2.isProcessing)) {
+      warning(
+        false,
+        'An update (setState, replaceState, or forceUpdate) was scheduled ' +
+          'from inside an update function. Update functions should be pure, ' +
+          'with zero side-effects. Consider using componentDidUpdate or a ' +
+          'callback.',
+      );
+    }
+  }
+
+  // Find the insertion position in the first queue.
+  const insertAfter1 = findInsertionPosition(queue1, update);
+  const insertBefore1 = insertAfter1 !== null
+    ? insertAfter1.next
+    : queue1.first;
+
+  if (queue2 === null) {
+    // If there's no alternate queue, there's nothing else to do but insert.
+    insertUpdateIntoQueue(queue1, update, insertAfter1, insertBefore1);
+    return null;
+  }
+
+  // If there is an alternate queue, find the insertion position.
+  const insertAfter2 = findInsertionPosition(queue2, update);
+  const insertBefore2 = insertAfter2 !== null
+    ? insertAfter2.next
+    : queue2.first;
+
+  // Now we can insert into the first queue. This must come after finding both
+  // insertion positions because it mutates the list.
+  insertUpdateIntoQueue(queue1, update, insertAfter1, insertBefore1);
+
+  // See if the insertion positions are equal. Be careful to only compare
+  // non-null values.
+  if (
+    (insertBefore1 === insertBefore2 && insertBefore1 !== null) ||
+    (insertAfter1 === insertAfter2 && insertAfter1 !== null)
+  ) {
+    // The insertion positions are the same, so when we inserted into the first
+    // queue, it also inserted into the alternate. All we need to do is update
+    // the alternate queue's `first` and `last` pointers, in case they
+    // have changed.
+    if (insertAfter2 === null) {
+      queue2.first = update;
+    }
+    if (insertBefore2 === null) {
+      queue2.last = null;
+    }
+    return null;
+  } else {
+    // The insertion positions are different, so we need to clone the update and
+    // insert the clone into the alternate queue.
+    const update2 = cloneUpdate(update);
+    insertUpdateIntoQueue(queue2, update2, insertAfter2, insertBefore2);
+    return update2;
+  }
+}
+```
+
