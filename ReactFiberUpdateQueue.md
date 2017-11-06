@@ -361,6 +361,121 @@ function addTopLevelUpdate(
   }
 }
 ```
+
+- getStateFromUpdate
+setState接受参数两种形式, 对象与函数
+```js
+function getStateFromUpdate(update, instance, prevState, props) {
+  const partialState = update.partialState;
+  if (typeof partialState === 'function') {
+    const updateFn = partialState;
+    return updateFn.call(instance, prevState, props);
+  } else {
+    return partialState;
+  }
+}
+```
+
+- beginUpdateQueue
+UpdateQueue中的partialState合并至State中
+```js
+function beginUpdateQueue(
+  current: Fiber | null,
+  workInProgress: Fiber,
+  queue: UpdateQueue,
+  instance: any,
+  prevState: any,
+  props: any,
+  priorityLevel: PriorityLevel,
+): any {
+  if (current !== null && current.updateQueue === queue) {
+    // We need to create a work-in-progress queue, by cloning the current queue.
+    const currentQueue = queue;
+    queue = workInProgress.updateQueue = {
+      first: currentQueue.first,
+      last: currentQueue.last,
+      // These fields are no longer valid because they were already committed.
+      // Reset them.
+      callbackList: null,
+      hasForceUpdate: false,
+    };
+  }
+
+  if (__DEV__) {
+    // Set this flag so we can warn if setState is called inside the update
+    // function of another setState.
+    queue.isProcessing = true;
+  }
+
+  // Calculate these using the the existing values as a base.
+  let callbackList = queue.callbackList;
+  let hasForceUpdate = queue.hasForceUpdate;
+
+  // Applies updates with matching priority to the previous state to create
+  // a new state object.
+  let state = prevState;
+  let dontMutatePrevState = true;
+  let update = queue.first;
+  while (
+    update !== null &&
+    comparePriority(update.priorityLevel, priorityLevel) <= 0
+  ) {
+    // Remove each update from the queue right before it is processed. That way
+    // if setState is called from inside an updater function, the new update
+    // will be inserted in the correct position.
+    queue.first = update.next;
+    if (queue.first === null) {
+      queue.last = null;
+    }
+
+    let partialState;
+    if (update.isReplace) {
+      state = getStateFromUpdate(update, instance, state, props);
+      dontMutatePrevState = true;
+    } else {
+      partialState = getStateFromUpdate(update, instance, state, props);
+      if (partialState) {
+        if (dontMutatePrevState) {
+          state = Object.assign({}, state, partialState);
+        } else {
+          state = Object.assign(state, partialState);
+        }
+        dontMutatePrevState = false;
+      }
+    }
+    if (update.isForced) {
+      hasForceUpdate = true;
+    }
+    // Second condition ignores top-level unmount callbacks if they are not the
+    // last update in the queue, since a subsequent update will cause a remount.
+    if (
+      update.callback !== null &&
+      !(update.isTopLevelUnmount && update.next !== null)
+    ) {
+      callbackList = callbackList !== null ? callbackList : [];
+      callbackList.push(update.callback);
+      workInProgress.effectTag |= CallbackEffect;
+    }
+    update = update.next;
+  }
+
+  queue.callbackList = callbackList;
+  queue.hasForceUpdate = hasForceUpdate;
+
+  if (queue.first === null && callbackList === null && !hasForceUpdate) {
+    // The queue is empty and there are no callbacks. We can reset it.
+    workInProgress.updateQueue = null;
+  }
+
+  if (__DEV__) {
+    // No longer processing.
+    queue.isProcessing = false;
+  }
+
+  return state;
+}
+```
+
 - commitCallbacks
 调用callbacks
 ```js
