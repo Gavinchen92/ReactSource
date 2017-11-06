@@ -9,7 +9,7 @@
   - isTopLevelUnmount 是否卸载优先级最高(TODO)
   - next 后一个Update对象
 
-- Update对象队列类型
+- UpdateQueue对象队列类型
   - first 第一个
   - last 最后一个
   - hasForceUpdate 是否强制更新
@@ -233,4 +233,159 @@ function insertUpdate(fiber: Fiber, update: Update): Update | null {
   }
 }
 ```
+- addUpdate
+已知partialState, callback, priotiryLevel, 向fiber插入Update
 
+```javascript
+function addUpdate(
+  fiber: Fiber,
+  partialState: PartialState<any, any> | null,
+  callback: mixed,
+  priorityLevel: PriorityLevel,
+): void {
+  const update = {
+    priorityLevel,
+    partialState,
+    callback,
+    isReplace: false,
+    isForced: false,
+    isTopLevelUnmount: false,
+    next: null,
+  };
+  insertUpdate(fiber, update);
+}
+```
+
+- addReplaceUpdate
+插入ReplaceUpdate, 与addUpdate函数不同的是, 第二个参数是一个完整的state, 而不是partialState
+```javascript
+function addReplaceUpdate(
+  fiber: Fiber,
+  state: any | null,
+  callback: Callback | null,
+  priorityLevel: PriorityLevel,
+): void {
+  const update = {
+    priorityLevel,
+    partialState: state,
+    callback,
+    isReplace: true,
+    isForced: false,
+    isTopLevelUnmount: false,
+    next: null,
+  };
+  insertUpdate(fiber, update);
+}
+```
+
+- addForceUpdate
+插入forceUpdate
+```js
+function addForceUpdate(
+  fiber: Fiber,
+  callback: Callback | null,
+  priorityLevel: PriorityLevel,
+): void {
+  const update = {
+    priorityLevel,
+    partialState: null,
+    callback,
+    isReplace: false,
+    isForced: true,
+    isTopLevelUnmount: false,
+    next: null,
+  };
+  insertUpdate(fiber, update);
+}
+```
+
+- getUpdatepriority
+获取fiber的updateQueue优先级
+如`updateQueue === null`,则优先级最高
+如该fiber不是ClassComponent, 也不是HostRoot, 则优先级最高
+不然的话返回第一个Update的优先级
+```js
+function getUpdatePriority(fiber: Fiber): PriorityLevel {
+  const updateQueue = fiber.updateQueue;
+  if (updateQueue === null) {
+    return NoWork;
+  }
+  if (fiber.tag !== ClassComponent && fiber.tag !== HostRoot) {
+    return NoWork;
+  }
+  return updateQueue.first !== null ? updateQueue.first.priorityLevel : NoWork;
+}
+```
+
+- addTopLevelUpdate
+插入一个卸载等级最高的update?
+并且需要看partialState的element是否为`null`
+若为 null 则将这个update对象放到更新队列最后
+
+```js
+function addTopLevelUpdate(
+  fiber: Fiber,
+  partialState: PartialState<any, any>,
+  callback: Callback | null,
+  priorityLevel: PriorityLevel,
+): void {
+  const isTopLevelUnmount = partialState.element === null;
+
+  const update = {
+    priorityLevel,
+    partialState,
+    callback,
+    isReplace: false,
+    isForced: false,
+    isTopLevelUnmount,
+    next: null,
+  };
+  const update2 = insertUpdate(fiber, update);
+
+  if (isTopLevelUnmount) {
+    // TODO: Redesign the top-level mount/update/unmount API to avoid this
+    // special case.
+    const queue1 = _queue1;
+    const queue2 = _queue2;
+
+    // Drop all updates that are lower-priority, so that the tree is not
+    // remounted. We need to do this for both queues.
+    if (queue1 !== null && update.next !== null) {
+      update.next = null;
+      queue1.last = update;
+    }
+    if (queue2 !== null && update2 !== null && update2.next !== null) {
+      update2.next = null;
+      queue2.last = update;
+    }
+  }
+}
+```
+- commitCallbacks
+调用callbacks
+```js
+function commitCallbacks(
+  finishedWork: Fiber,
+  queue: UpdateQueue,
+  context: mixed,
+) {
+  const callbackList = queue.callbackList;
+  if (callbackList === null) {
+    return;
+  }
+
+  // Set the list to null to make sure they don't get called more than once.
+  queue.callbackList = null;
+
+  for (let i = 0; i < callbackList.length; i++) {
+    const callback = callbackList[i];
+    invariant(
+      typeof callback === 'function',
+      'Invalid argument passed as callback. Expected a function. Instead ' +
+        'received: %s',
+      callback,
+    );
+    callback.call(context);
+  }
+}
+```
